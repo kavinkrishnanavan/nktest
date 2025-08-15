@@ -1,109 +1,72 @@
 import streamlit as st
 import streamlit_authenticator as stauth
-import json
-import os
+import yaml
+from yaml.loader import SafeLoader
 from google_auth_oauthlib.flow import Flow
+import os
+import requests
 from google.oauth2 import id_token
-from google.auth.transport import requests
+from google.auth.transport import requests as google_requests
 
-# ----------------------
-# Load credentials from secrets.toml
-# ----------------------
+# --------------------------
+# LOAD CONFIG FROM SECRETS
+# --------------------------
 config = {
-    "credentials": {
-        "usernames": dict(st.secrets["credentials"]["usernames"])
-    },
-    "cookie": dict(st.secrets["cookie"]),
-    "preauthorized": dict(st.secrets["preauthorized"]),
+    "credentials": st.secrets["credentials"],
+    "cookie": st.secrets["cookie"]
 }
 
-# ----------------------
-# Streamlit Authenticator
-# ----------------------
+# --------------------------
+# STREAMLIT AUTHENTICATOR LOGIN
+# --------------------------
 authenticator = stauth.Authenticate(
     config["credentials"],
     config["cookie"]["name"],
     config["cookie"]["key"],
-    config["cookie"]["expiry_days"],
-    config["preauthorized"]
+    config["cookie"]["expiry_days"]
 )
 
-# ----------------------
-# Google OAuth Setup
-# ----------------------
-GOOGLE_CLIENT_ID = st.secrets["google"]["client_id"]
-GOOGLE_CLIENT_SECRET = st.secrets["google"]["client_secret"]
-GOOGLE_REDIRECT_URI = st.secrets["google"]["redirect_uri"]
-ALLOWED_EMAILS = st.secrets["allowed_emails"]
+# --------------------------
+# LOGIN FORM
+# --------------------------
+st.title("My Secure App")
 
-# This will be needed for local Google flow credentials.json
-GOOGLE_CONFIG = {
-    "web": {
-        "client_id": GOOGLE_CLIENT_ID,
-        "project_id": "streamlit-oauth",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uris": [GOOGLE_REDIRECT_URI]
-    }
-}
+# Standard username/password login
+name, authentication_status, username = authenticator.login("Login", "main")
 
-# ----------------------
-# Login Page
-# ----------------------
-st.title("🔐 Secure Login Page")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Login with Username & Password")
-    name, authentication_status, username = authenticator.login("Login", "main")
-
-with col2:
-    st.subheader("Login with Google")
-    auth_url = (
-        "https://accounts.google.com/o/oauth2/auth"
-        "?response_type=code"
-        f"&client_id={GOOGLE_CLIENT_ID}"
-        f"&redirect_uri={GOOGLE_REDIRECT_URI}"
-        "&scope=openid%20email%20profile"
-    )
-    st.markdown(f"[Sign in with Google]({auth_url})")
-
-# ----------------------
-# Handle Google Callback
-# ----------------------
-if "code" in st.query_params:
-    code = st.query_params["code"]
+# Google OAuth Login Button
+if st.button("Sign in with Google"):
+    client_id = st.secrets["google"]["client_id"]
+    client_secret = st.secrets["google"]["client_secret"]
+    redirect_uri = st.secrets["google"]["redirect_uri"]
 
     flow = Flow.from_client_config(
-        GOOGLE_CONFIG,
-        scopes=["openid", "email", "profile"],
-        redirect_uri=GOOGLE_REDIRECT_URI
+        {
+            "web": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uris": [redirect_uri],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token"
+            }
+        },
+        scopes=["https://www.googleapis.com/auth/userinfo.email", "openid"]
     )
+    flow.redirect_uri = redirect_uri
 
-    flow.fetch_token(code=code)
+    auth_url, _ = flow.authorization_url(prompt='consent')
+    st.markdown(f"[Click here to sign in with Google]({auth_url})")
 
-    credentials = flow.credentials
-    request_session = requests.Request()
-    id_info = id_token.verify_oauth2_token(
-        credentials.id_token, request_session, GOOGLE_CLIENT_ID
-    )
+# --------------------------
+# POST-LOGIN BEHAVIOR
+# --------------------------
+if authentication_status:
+    st.success(f"Welcome {name}!")
+    st.write("You can now access the app.")
+    authenticator.logout("Logout", "sidebar")
 
-    email = id_info.get("email")
-    if email in ALLOWED_EMAILS:
-        st.success(f"✅ Google Login Successful! Welcome {email}")
-        st.session_state["authentication_status"] = True
-        st.session_state["name"] = id_info.get("name")
-        st.session_state["username"] = email
-    else:
-        st.error("❌ You are not authorized to access this app.")
+elif authentication_status is False:
+    st.error("Username/password is incorrect")
 
-# ----------------------
-# If logged in, show content
-# ----------------------
-if st.session_state.get("authentication_status"):
-    st.write(f"Welcome {st.session_state.get('name', '')}!")
-    if st.button("Logout"):
-        authenticator.logout("Logout", "main")
+elif authentication_status is None:
+    st.warning("Please enter your username and password")
