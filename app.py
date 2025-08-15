@@ -1,25 +1,26 @@
 import streamlit as st
 import streamlit_authenticator as stauth
+import bcrypt
+import json
 from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
 import requests
-import os
-import json
+import pathlib
 
-st.set_page_config(page_title="My App with Google OAuth", layout="centered")
-
-# --------------------------
-# 1. COPY secrets into dicts so they are writable
-# --------------------------
+# -------------------
+# Load config from secrets
+# -------------------
 config = {
-    "credentials": dict(st.secrets["credentials"]),
+    "credentials": {
+        "usernames": dict(st.secrets["credentials"]["usernames"])
+    },
     "cookie": dict(st.secrets["cookie"]),
     "oauth": dict(st.secrets["oauth"])
 }
 
-# --------------------------
-# 2. Setup Streamlit Authenticator for username/password login
-# --------------------------
+# -------------------
+# Setup Authenticator
+# -------------------
 authenticator = stauth.Authenticate(
     config["credentials"],
     config["cookie"]["name"],
@@ -27,44 +28,48 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"]
 )
 
-# --------------------------
-# 3. Login Form
-# --------------------------
-st.title("🔐 Welcome to My App")
+# -------------------
+# Login form
+# -------------------
+st.title("🔐 My Web App Login")
 
-login_option = st.radio("Choose login method:", ["Username & Password", "Google Login"])
+name, authentication_status, username = authenticator.login("Login", location="main")
 
-if login_option == "Username & Password":
-    name, auth_status, username = authenticator.login("Login", location="main")
+if authentication_status is False:
+    st.error("Username or password is incorrect.")
+elif authentication_status is None:
+    st.warning("Please enter your username and password.")
+elif authentication_status:
+    st.success(f"Welcome {name}!")
+    st.write("This is your main app content here.")
+    authenticator.logout("Logout", "sidebar")
 
-    if auth_status:
-        st.success(f"Welcome, {name}!")
-        authenticator.logout("Logout", "sidebar")
-        st.write("✅ You are now logged in.")
-    elif auth_status is False:
-        st.error("Username/password is incorrect")
-    elif auth_status is None:
-        st.warning("Please enter your username and password")
+# -------------------
+# Google OAuth Login
+# -------------------
+st.markdown("---")
+st.subheader("Or Sign in with Google")
 
-# --------------------------
-# 4. Google OAuth Login
-# --------------------------
-elif login_option == "Google Login":
-    client_id = config["oauth"]["client_id"]
-    client_secret = config["oauth"]["client_secret"]
-    redirect_uri = config["oauth"]["redirect_uri"]
+client_config = {
+    "web": {
+        "client_id": config["oauth"]["client_id"],
+        "project_id": config["oauth"]["project_id"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret": config["oauth"]["client_secret"],
+        "redirect_uris": [config["oauth"]["redirect_uri"]],
+        "javascript_origins": [config["oauth"]["javascript_origin"]]
+    }
+}
 
-    if "credentials" not in st.session_state:
-        auth_url = (
-            "https://accounts.google.com/o/oauth2/v2/auth"
-            "?response_type=code"
-            f"&client_id={client_id}"
-            f"&redirect_uri={redirect_uri}"
-            "&scope=openid%20email%20profile"
-        )
-        st.markdown(f"[Login with Google]({auth_url})")
+if st.button("Sign in with Google"):
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+    )
+    flow.redirect_uri = config["oauth"]["redirect_uri"]
+    auth_url, _ = flow.authorization_url(prompt="consent")
+    st.markdown(f"[Click here to authenticate]({auth_url})")
 
-    else:
-        st.success("Logged in with Google!")
-        st.write(st.session_state.credentials)
-
+# After redirect, you’ll handle the Google response in your redirect URI endpoint
